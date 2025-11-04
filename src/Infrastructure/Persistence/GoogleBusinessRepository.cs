@@ -1,0 +1,44 @@
+using GoogleConnectorService.Core.Application;
+using GoogleConnectorService.Core.Domain;
+using Microsoft.Azure.Cosmos;
+
+namespace GoogleConnectorService.Infrastructure.Persistence;
+
+public class GoogleBusinessRepository : IGoogleBusinessRepository
+{
+    private readonly Container _container;
+
+    public GoogleBusinessRepository(CosmosClient cosmosClient, string databaseName, string containerName)
+    {
+        _container = cosmosClient.GetContainer(databaseName, containerName);
+    }
+
+    public async Task<GoogleBusiness?> GetByIdAsync(string businessId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await _container.ReadItemAsync<GoogleBusiness>(
+                businessId,
+                new PartitionKey(businessId),
+                cancellationToken: cancellationToken);
+            return response.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task AddAsync(GoogleBusiness business, CancellationToken cancellationToken = default)
+    {
+        await _container.CreateItemAsync(business, new PartitionKey(business.BusinessId), cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateAsync(GoogleBusiness business, CancellationToken cancellationToken = default)
+    {
+        await _container.ReplaceItemAsync(business, business.BusinessId, new PartitionKey(business.BusinessId), cancellationToken: cancellationToken);
+    }
+}
+
+
+
