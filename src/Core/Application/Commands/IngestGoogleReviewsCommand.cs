@@ -5,7 +5,8 @@ namespace GoogleConnectorService.Core.Application.Commands;
 
 public class IngestGoogleReviewsCommand : IRequest<IngestGoogleReviewsResult>
 {
-    public string BusinessId { get; set; } = string.Empty;
+    public string BusinessId { get; set; } = string.Empty; // Google Business Location ID or full path
+    public Guid? ProfileBusinessId { get; set; } // Optional: If provided, will lookup GoogleBusiness by ProfileBusinessId
 }
 
 public class IngestGoogleReviewsResult
@@ -36,8 +37,31 @@ public class IngestGoogleReviewsCommandHandler : IRequestHandler<IngestGoogleRev
     {
         try
         {
+            string googleBusinessId = request.BusinessId;
+            
+            // If ProfileBusinessId is provided, lookup the GoogleBusiness
+            if (request.ProfileBusinessId.HasValue && string.IsNullOrEmpty(request.BusinessId))
+            {
+                var googleBusiness = await _businessRepository.GetByProfileBusinessIdAsync(
+                    request.ProfileBusinessId.Value, 
+                    cancellationToken);
+                
+                if (googleBusiness == null)
+                {
+                    return new IngestGoogleReviewsResult
+                    {
+                        ReviewsIngested = 0,
+                        SyncDate = DateTime.UtcNow,
+                        Success = false,
+                        ErrorMessage = $"No GoogleBusiness found for ProfileBusinessId: {request.ProfileBusinessId.Value}"
+                    };
+                }
+                
+                googleBusinessId = googleBusiness.BusinessId;
+            }
+            
             // Fetch reviews from Google API
-            var reviews = await _googleApiClient.GetReviewsAsync(request.BusinessId, cancellationToken);
+            var reviews = await _googleApiClient.GetReviewsAsync(googleBusinessId, cancellationToken);
 
             // Store reviews in database
             foreach (var review in reviews)
@@ -46,7 +70,7 @@ public class IngestGoogleReviewsCommandHandler : IRequestHandler<IngestGoogleRev
             }
 
             // Update last sync date
-            var business = await _businessRepository.GetByIdAsync(request.BusinessId, cancellationToken);
+            var business = await _businessRepository.GetByIdAsync(googleBusinessId, cancellationToken);
             if (business != null)
             {
                 business.LastSyncDate = DateTime.UtcNow;

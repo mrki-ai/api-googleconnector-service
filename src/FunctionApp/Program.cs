@@ -60,13 +60,18 @@ var host = new HostBuilder()
             return new GoogleBusinessRepository(cosmosClient, databaseName, businessesContainerName);
         });
 
+        // HttpClient for Google API
+        services.AddHttpClient();
+
         // Google API Client
         services.AddScoped<IGoogleApiClient>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<GoogleApiClient>>();
+            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var httpClient = httpClientFactory.CreateClient();
             var credentialsJson = configuration["Google:CredentialsJson"] 
                 ?? throw new InvalidOperationException("Google:CredentialsJson is required");
-            return new GoogleApiClient(logger, credentialsJson);
+            return new GoogleApiClient(logger, credentialsJson, httpClient);
         });
 
         // Key Vault (optional)

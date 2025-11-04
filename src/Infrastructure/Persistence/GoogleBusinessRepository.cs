@@ -29,6 +29,31 @@ public class GoogleBusinessRepository : IGoogleBusinessRepository
         }
     }
 
+    public async Task<GoogleBusiness?> GetByProfileBusinessIdAsync(Guid profileBusinessId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Query CosmosDB for GoogleBusiness by ProfileBusinessId
+            // Note: CosmosDB queries need to handle GUID properly
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.profileBusinessId = @profileBusinessId")
+                .WithParameter("@profileBusinessId", profileBusinessId);
+            
+            var iterator = _container.GetItemQueryIterator<GoogleBusiness>(query);
+            
+            if (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(cancellationToken);
+                return response.FirstOrDefault();
+            }
+            
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     public async Task AddAsync(GoogleBusiness business, CancellationToken cancellationToken = default)
     {
         await _container.CreateItemAsync(business, new PartitionKey(business.BusinessId), cancellationToken: cancellationToken);
