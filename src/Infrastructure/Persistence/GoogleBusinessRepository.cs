@@ -48,6 +48,13 @@ public class GoogleBusinessRepository : IGoogleBusinessRepository
             
             return null;
         }
+        catch (Exception ex) when (ex.Message.Contains("NullReferenceException") || 
+                                    ex.Message.Contains("Postgres.Core") ||
+                                    ex.Message.Contains("SqlMessageFormatter"))
+        {
+            // CosmosDB emulator bug - return null
+            return null;
+        }
         catch (Exception)
         {
             return null;

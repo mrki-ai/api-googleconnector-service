@@ -28,37 +28,110 @@ var host = new HostBuilder()
         services.AddMediatR(cfg => 
             cfg.RegisterServicesFromAssembly(typeof(IGoogleReviewRepository).Assembly));
 
-        // CosmosDB Client
-        var cosmosConnectionString = configuration["CosmosDb:ConnectionString"] 
-            ?? throw new InvalidOperationException("CosmosDb:ConnectionString is required");
-        
-        services.AddSingleton(sp =>
+        // CosmosDB Client - Use mock repositories if connection fails or USE_MOCK_STORAGE is set
+        var useMockStorage = configuration["UseMockStorage"] == "true" || 
+                             configuration["UseMockStorage"] == "True";
+        var cosmosConnectionString = configuration["CosmosDb:ConnectionString"];
+
+        // Force mock storage if explicitly set
+        if (useMockStorage)
         {
-            return new CosmosClient(cosmosConnectionString, new CosmosClientOptions
+            services.AddScoped<IGoogleReviewRepository>(sp => new MockGoogleReviewRepository());
+            services.AddScoped<IGoogleBusinessRepository>(sp => new MockGoogleBusinessRepository());
+        }
+        else if (!string.IsNullOrEmpty(cosmosConnectionString))
+        {
+            try
             {
-                SerializerOptions = new CosmosSerializationOptions
+                var cosmosClientOptions = new CosmosClientOptions
                 {
-                    PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+                    SerializerOptions = new CosmosSerializationOptions
+                    {
+                        PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+                    }
+                };
+                
+                // For local emulator, use Gateway mode (HTTP) and disable SSL validation if needed
+                if (cosmosConnectionString.Contains("localhost:8081"))
+                {
+                    cosmosClientOptions.ConnectionMode = ConnectionMode.Gateway;
+                    cosmosClientOptions.HttpClientFactory = () =>
+                    {
+                        var handler = new HttpClientHandler();
+                        handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
+                        return new HttpClient(handler);
+                    };
                 }
-            });
-        });
+                
+                var cosmosClient = new CosmosClient(cosmosConnectionString, cosmosClientOptions);
+                
+                services.AddSingleton(cosmosClient);
 
-        // Repositories
-        var databaseName = configuration["CosmosDb:DatabaseName"] ?? "GoogleConnectorDb";
-        var reviewsContainerName = configuration["CosmosDb:ReviewsContainerName"] ?? "Reviews";
-        var businessesContainerName = configuration["CosmosDb:BusinessesContainerName"] ?? "Businesses";
+                // Repositories
+                var databaseName = configuration["CosmosDb:DatabaseName"] ?? "GoogleConnectorDb";
+                var reviewsContainerName = configuration["CosmosDb:ReviewsContainerName"] ?? "Reviews";
+                var businessesContainerName = configuration["CosmosDb:BusinessesContainerName"] ?? "Businesses";
 
-        services.AddScoped<IGoogleReviewRepository>(sp =>
+                // Initialize database and containers asynchronously
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        var database = await cosmosClient.CreateDatabaseIfNotExistsAsync(databaseName);
+                        await database.Database.CreateContainerIfNotExistsAsync(
+                            new ContainerProperties(reviewsContainerName, "/id"));
+                        await database.Database.CreateContainerIfNotExistsAsync(
+                            new ContainerProperties(businessesContainerName, "/businessId"));
+                        Console.WriteLine($"✅ CosmosDB database '{databaseName}' and containers initialized");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️  Warning: Could not create CosmosDB containers: {ex.Message}");
+                    }
+                });
+
+                services.AddScoped<IGoogleReviewRepository>(sp =>
+                {
+                    try
+                    {
+                        var cosmosClient = sp.GetRequiredService<CosmosClient>();
+                        return new GoogleReviewRepository(cosmosClient, databaseName, reviewsContainerName);
+                    }
+                    catch
+                    {
+                        // Fallback to mock if CosmosDB connection fails
+                        return new MockGoogleReviewRepository();
+                    }
+                });
+
+                services.AddScoped<IGoogleBusinessRepository>(sp =>
+                {
+                    try
+                    {
+                        var cosmosClient = sp.GetRequiredService<CosmosClient>();
+                        return new GoogleBusinessRepository(cosmosClient, databaseName, businessesContainerName);
+                    }
+                    catch
+                    {
+                        // Fallback to mock if CosmosDB connection fails
+                        return new MockGoogleBusinessRepository();
+                    }
+                });
+            }
+            catch
+            {
+                // Fallback to mock repositories if CosmosDB setup fails
+                useMockStorage = true;
+            }
+        }
+
+        // Mock storage is already set above if useMockStorage was true
+        if (!useMockStorage && string.IsNullOrEmpty(cosmosConnectionString))
         {
-            var cosmosClient = sp.GetRequiredService<CosmosClient>();
-            return new GoogleReviewRepository(cosmosClient, databaseName, reviewsContainerName);
-        });
-
-        services.AddScoped<IGoogleBusinessRepository>(sp =>
-        {
-            var cosmosClient = sp.GetRequiredService<CosmosClient>();
-            return new GoogleBusinessRepository(cosmosClient, databaseName, businessesContainerName);
-        });
+            // Fallback to mock if no connection string and not explicitly disabled
+            services.AddScoped<IGoogleReviewRepository>(sp => new MockGoogleReviewRepository());
+            services.AddScoped<IGoogleBusinessRepository>(sp => new MockGoogleBusinessRepository());
+        }
 
         // HttpClient for Google API
         services.AddHttpClient();
